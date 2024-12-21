@@ -1,13 +1,14 @@
 import json
 import torch
+from torch_geometric.nn import SAGEConv
 from algo_common import *
 from utill import *
 
 
 
-class Alg_MLP(Alg):
+class Alg_trans_GNN(Alg):
     def set_algo(self,model_dir,start_epoch):
-        self.model = MLP(5630,128,64).to(self.device) #input:postal_code one hot 5611 + apart_features 10 + apart_poi 8 = 5629
+        self.model = trans_GNN(16,128,256,128).to(self.device)
 
         if self.training_mode:
             self.train_loss_dict = {}
@@ -28,38 +29,42 @@ class Alg_MLP(Alg):
                     error_msg = f"No model found at {model_path}. Starting from scratch for {self.name}."
                     print(error_msg)
                     raise FileNotFoundError(error_msg)
-
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.lr)
-            self.criterion = torch.nn.MSELoss()
-            self.scheduler = optim.lr_scheduler.LambdaLR(optimizer=self.optimizer,
-                                        lr_lambda=lambda epoch: 0.95 ** epoch)
+            self.criterion = torch.nn.MSELoss() 
         else:
-            if self.best_model:
-                self.model.load_state_dict(torch.load(f"models/{model_dir}/{self.name}/best_model.pth", map_location=self.device, weights_only=True))
-            else:
-                self.model.load_state_dict(torch.load(f"models/{model_dir}/{self.name}/{self.config.epoch}.pth", map_location=self.device, weights_only=True))
+            self.model.load_state_dict(torch.load(f"models/{model_dir}/{self.name}/{self.config.epoch}.pth", map_location=self.device))
 
 
 
-class MLP(torch.nn.Module):
-    def __init__(self, input_size, hidden_size1, hidden_size2):
-        super(MLP, self).__init__()
-
-        self.fc1 = torch.nn.Linear(input_size, hidden_size1)
-        self.fc2 = torch.nn.Linear(hidden_size1, hidden_size2)
-        self.fc3 = torch.nn.Linear(hidden_size2, 1)
+class trans_GNN(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, hidden_dim2, hidden_dim3):
+        super(trans_GNN, self).__init__()
+        self.conv1 = SAGEConv(input_dim, hidden_dim)
+        self.conv2 = SAGEConv(hidden_dim, hidden_dim)
+        
+        self.fc1 = torch.nn.Linear(hidden_dim, hidden_dim2)
+        self.fc2 = torch.nn.Linear(hidden_dim2, hidden_dim3)
+        self.fc3 = torch.nn.Linear(hidden_dim3, 1)
         self.sigmoid = torch.nn.Sigmoid()
         self.act1 = torch.nn.LeakyReLU(negative_slope=0.1)
         self.act2 = torch.nn.LeakyReLU(negative_slope=0.05)
-        self.bn1 = torch.nn.BatchNorm1d(hidden_size1)
+        self.bn1 = torch.nn.BatchNorm1d(hidden_dim2)
+        self.bn2 = torch.nn.BatchNorm1d(hidden_dim3)
 
     def forward(self, batch):
-        batch_size = len(batch.ptr) - 1
-        x = batch.trans_poi.view(batch_size, -1)
-        x = self.fc1(x)
-        x = self.act1(x)
+        x = batch.x
+        edge_index = batch.edge_index 
+        target_node_idx = batch.node_index
+
+        x = self.conv1(x, edge_index)
+        x = torch.relu(x)
+        x = self.conv2(x, edge_index)
+        x = self.fc1( x[target_node_idx] )
         x = self.bn1(x)
+        x = self.act1(x)
+
         x = self.fc2(x)
+        x = self.bn2(x)
         x = self.act2(x)
 
         x = self.fc3(x)

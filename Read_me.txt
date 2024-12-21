@@ -2,7 +2,7 @@
     python 3.10.12
     pip install -r requirements.txt
 
-2. 실행
+2. 실행 - MLP, PostalGNN
     python train_eval.py config={config_name} pid=0 device=0
         - config: 실험 setup
             years: 무슨년도 데이터 사용할지 (오름차순으로 list 형태)
@@ -16,4 +16,10 @@
 
         - pid: seed설정시 사용 (연도가 같아도 시드가 다를시 다른 실험) DEFAULT=0
         - device: cuda사용시 몇번째 cuda DEFAULT=0
+
+2. 실행 - trans_GNN
+    python trans_edge_idx_gen.py config=train_test_trans.config
+        node feature와 edge 만들어줌
+    python train_eval_trans.py config=train_test_trans.config pid=0 device=0
+
 

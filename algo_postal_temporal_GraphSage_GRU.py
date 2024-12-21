@@ -1,13 +1,17 @@
 import json
 import torch
+from torch import nn
+import torch.nn.functional as F
+from torch.nn import GRU
+from torch_geometric.nn import SAGEConv
 from algo_common import *
 from utill import *
 
 
 
-class Alg_MLP(Alg):
+class Alg_postal_temporal_GraphSage_GRU(Alg):
     def set_algo(self,model_dir,start_epoch):
-        self.model = MLP(5630,128,64).to(self.device) #input:postal_code one hot 5611 + apart_features 10 + apart_poi 8 = 5629
+        self.model = Postal_temporal_GraphSage_GRU(12,10,64,128,64,11,5611,self.device).to(self.device)
 
         if self.training_mode:
             self.train_loss_dict = {}
@@ -28,7 +32,6 @@ class Alg_MLP(Alg):
                     error_msg = f"No model found at {model_path}. Starting from scratch for {self.name}."
                     print(error_msg)
                     raise FileNotFoundError(error_msg)
-
             self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.config.lr)
             self.criterion = torch.nn.MSELoss()
             self.scheduler = optim.lr_scheduler.LambdaLR(optimizer=self.optimizer,
@@ -41,24 +44,47 @@ class Alg_MLP(Alg):
 
 
 
-class MLP(torch.nn.Module):
-    def __init__(self, input_size, hidden_size1, hidden_size2):
-        super(MLP, self).__init__()
-
-        self.fc1 = torch.nn.Linear(input_size, hidden_size1)
-        self.fc2 = torch.nn.Linear(hidden_size1, hidden_size2)
-        self.fc3 = torch.nn.Linear(hidden_size2, 1)
+class Postal_temporal_GraphSage_GRU(torch.nn.Module):
+    def __init__(self, input_dim, apart_feature_dim, hidden_dim, hidden_dim2, hidden_dim3,num_time_slot,num_postal_codes,device):
+        super(Postal_temporal_GraphSage_GRU, self).__init__()
+        self.device = device
+        self.num_time_slot = num_time_slot
+        self.num_postal_codes = num_postal_codes
+        self.hidden_dim = hidden_dim
+        self.conv1 = SAGEConv(input_dim, hidden_dim)
+        self.conv2 = SAGEConv(hidden_dim, hidden_dim)
+        self.GRU_layer = GRU(input_size=hidden_dim,hidden_size=hidden_dim)
+        self.fc1 = torch.nn.Linear(hidden_dim+apart_feature_dim, hidden_dim2)
+        self.fc2 = torch.nn.Linear(hidden_dim2, hidden_dim3)
+        self.fc3 = torch.nn.Linear(hidden_dim3, 1)
         self.sigmoid = torch.nn.Sigmoid()
         self.act1 = torch.nn.LeakyReLU(negative_slope=0.1)
         self.act2 = torch.nn.LeakyReLU(negative_slope=0.05)
-        self.bn1 = torch.nn.BatchNorm1d(hidden_size1)
+        self.bn1 = torch.nn.BatchNorm1d(hidden_dim2)
+        self.bn2 = torch.nn.BatchNorm1d(hidden_dim3)
 
     def forward(self, batch):
-        batch_size = len(batch.ptr) - 1
-        x = batch.trans_poi.view(batch_size, -1)
-        x = self.fc1(x)
+        batch_0 = batch[0].to(self.device)
+        edge_index = batch_0.edge_index.view(2, -1)
+        target_node_idx = batch_0.node_idx
+        apart_feature = batch_0.apart_feature
+        region_embeddings = torch.zeros((self.num_time_slot, len(target_node_idx)*self.num_postal_codes, self.hidden_dim)).to(self.device)
+        for i in range(self.num_time_slot):
+            x = batch[i].to(self.device).x.view(-1,12)
+            x = self.conv1(x, edge_index)
+            region_embeddings[i] = torch.relu(x)
+        region_embeddings, _ = self.GRU_layer(region_embeddings)
+        
+        for i in range(self.num_time_slot):    
+            x = region_embeddings[i]
+            x = self.conv2(x, edge_index)
+            region_embeddings[i] = torch.relu(x)
+        _, region_embeddings = self.GRU_layer(region_embeddings)
+        region_embeddings = region_embeddings.squeeze(0)
+        
+        x = self.fc1( torch.cat((region_embeddings[target_node_idx], apart_feature.view(-1, 10)), dim=1))
         x = self.act1(x)
-        x = self.bn1(x)
+
         x = self.fc2(x)
         x = self.act2(x)
 

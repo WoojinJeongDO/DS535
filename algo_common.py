@@ -10,6 +10,7 @@ class Alg:
         self.config = config
         self.device = torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
         self.training_mode = config.training_mode
+        self.best_model = config.best_model
 
     def set_algo(self,model_dir,start_epoch):
         pass
